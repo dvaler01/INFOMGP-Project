@@ -9,3 +9,5 @@ Team: Valeris Dimitrios (6175597) Latos Anastasios (6309070)
 -User is able to adjust the power of throwing by changing the power value in the platform. In same way, is also able to adjust the x, y-axis angle in order to aim.
 
 -User is able to shoot by pressing the space button. He can also reload the scene (different random wind vector & new object for throwing) by pressing the R button.
+
+![alt text](https://github.com/dvaler01/INFOMGP-Project/blob/master/presentation/1.png)
