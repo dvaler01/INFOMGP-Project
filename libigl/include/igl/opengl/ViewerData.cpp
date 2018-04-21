@@ -19,7 +19,7 @@
 IGL_INLINE igl::opengl::ViewerData::ViewerData()
 : dirty(MeshGL::DIRTY_ALL),
   show_faces(true),
-  show_lines(true),
+  show_lines(false),
   invert_normals(false),
   show_overlay(true),
   show_overlay_depth(true),

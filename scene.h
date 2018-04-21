@@ -11,6 +11,7 @@
 #include <igl/diag.h>
 #include <igl/readMESH.h>
 #include <igl/copyleft/tetgen/tetrahedralize.h>
+#include <igl/igl_inline.h>
 #include "constraints.h"
 #include "auxfunctions.h"
 #include "ccd.h"
@@ -32,7 +33,8 @@ public:
   VectorXd currPositions;     //3|V|x1 current vertex positions in xyzxyz format
   VectorXd currPositionsOld;    
   Vector3d ObjectCenter;
-  double timestepold = 0;
+  int totaltime = 0; 
+  int direction=-1;
   
   //kinematics
   bool isFixed;               //is the object immobile (infinite mass)
@@ -48,7 +50,8 @@ public:
   VectorXi boundTets;  //just the boundary tets, for collision
   
   double youngModulus, poissonRatio, density, alpha, beta;
-  
+  bool shot = false;
+
   SparseMatrix<double> A, K, M, D;   //The soft-body matrices
   
   SimplicialLLT<SparseMatrix<double>>* ASolver;   //the solver for the left-hand side matrix constructed for FEM
@@ -57,6 +60,7 @@ public:
   
   //Quick-reject checking collision between mesh bounding boxes.
   bool isBoxCollide(const Mesh& m2){
+
     RowVector3d XMin1=RowVector3d::Constant(3276700.0);
     RowVector3d XMax1=RowVector3d::Constant(-3276700.0);
     RowVector3d XMin2=RowVector3d::Constant(3276700.0);
@@ -96,16 +100,16 @@ public:
   
   
   //this function creates all collision constraints between vertices of the two meshes
-  void createCollisionConstraints(const Mesh& m, const bool sameMesh, const double timeStep, const double CRCoeff, vector<Constraint>& activeConstraints){
+  bool createCollisionConstraints(const Mesh& m, const bool sameMesh, const double timeStep, const double CRCoeff, vector<Constraint>& activeConstraints){
     
 
     //collision between bounding boxes
 	if (!isBoxCollide(m)) {
-		return;
+		return false;
 	}
     
 	if ((isFixed && m.isFixed)) {//collision does nothing
-		return;
+		return false;
 	}
     
     //creating tet spheres
@@ -273,6 +277,7 @@ public:
     }
 
     activeConstraints.insert(activeConstraints.end(), collisionConstraints.begin(), collisionConstraints.end());
+	return true;
   }
   
   //where the matrices A,M,K,D are created and factorized to ASolver at each change of time step, or beginning of time.
@@ -473,7 +478,7 @@ public:
   }
   
   //performing the integration step of the soft body.
-  void integrateVelocity(double timeStep){
+  void integrateVelocity(double timeStep,int index, double power, double angleth, double anglephi, double airth, double airphi, double airforce){
     
     /***************************
      
@@ -481,18 +486,87 @@ public:
 	if (isFixed)
 		return;
 
-	double grav = -9.81;
+	double grav = 9.81;
 
 	for (int i = 0; i < currVelocities.rows() / 3; i++)
 	{
-		currVelocities(i * 3 + 1) += grav * timeStep;
+		if (shot) {
+			currVelocities(i * 3 + 1) -= grav * timeStep;
+		}
+		if (index != 3 && index != 4) {
+
+			currVelocities(i * 3 ) = currVelocities(i * 3 ) + direction * grav * timeStep;
+
+			if (currVelocities(i * 3 ) < -10)
+				direction = direction * -1;
+			else if (currVelocities(i * 3 )>10)
+				direction = direction * -1;
+		}
+	}
+
+	if (index == 4) {
+		if (!shot) {
+			if (totaltime == 50) {
+				for (int i = 0; i < currVelocities.rows() / 3; i++)
+				{
+					currVelocities(i * 3 + 2) = -sqrt(2 * power / 0.1)*cos(angleth)*cos(anglephi); //z
+					currVelocities(i * 3 + 1) = sqrt(2 * power / 0.1)*sin(angleth)*cos(anglephi); //y
+					currVelocities(i * 3) = sqrt(2 * power / 0.1)*sin(anglephi); //x
+
+					currVelocities(i * 3 + 2) += -sqrt(2 * airforce / 0.1)*cos(airth)*cos(airphi); //z
+					currVelocities(i * 3 + 1) += sqrt(2 * airforce / 0.1)*sin(airth)*cos(airphi); //y
+					currVelocities(i * 3) += sqrt(2 * airforce / 0.1)*sin(airphi); //x
+				}
+				currPositions = origPositions;
+				totaltime = 0;
+			}
+			else {
+				for (int i = 0; i < currVelocities.rows() / 3; i++)
+				{
+					currVelocities(i * 3 + 1) -= grav * timeStep;
+				}
+				totaltime++;
+			}
+		}
+		else 
+			currPositions = origPositions;
+
 	}
 
   }
 
 
+  void setshotvel(double power,double angleth,double anglephi, double airth, double airphi, double airforce) {
+
+	  shot = true;
+	  double grav = 9.81;
+
+
+	  for (int i = 0; i < currVelocities.rows() / 3; i++)
+	  {
+		  currVelocities(i * 3 +2) =    -sqrt(2 * power / 0.1)*cos(angleth)*cos(anglephi); //z
+		  currVelocities(i * 3 + 1) = sqrt(2 * power / 0.1)*sin(angleth)*cos(anglephi); //y
+		  currVelocities(i * 3 ) = sqrt(2 * power / 0.1)*sin(anglephi); //x
+
+		  currVelocities(i * 3 + 2) += -sqrt(2 * airforce / 0.1)*cos(airth)*cos(airphi); //z
+		  currVelocities(i * 3 + 1) += sqrt(2 * airforce / 0.1)*sin(airth)*cos(airphi); //y
+		  currVelocities(i * 3) += sqrt(2 * airforce / 0.1)*sin(airphi); //x
+
+		  currVelocities(i * 3 + 1) -= grav * 0.02;
+	  }
+  }
+
+
+  void restartshot() {
+	  shot = false;
+	  currPositions = origPositions;
+	  currVelocities = VectorXd::Zero(origPositions.rows());
+	  currImpulses = VectorXd::Zero(origPositions.rows());
+
+  }
+
   //performing the integration step of the soft body.
-  void integrateVelocities(double timeStep) {
+  void integrateVelocities(double timeStep,double currTime) {
 
 	  /***************************
 
@@ -512,34 +586,37 @@ public:
 	  double grav = -9.81;
 	  for (int i = 0; i < currVelocities.size()/3; i++)
 	  {
-			Fgrav(i * 3 + 1) = grav;
+		  Fgrav(i * 3 + 1) = grav * currTime;
 	  }
 	  Fgrav = M * Fgrav;
-
-	  b = M * currVelocities - timeStep*((K*(currPositions - origPositions)- Fgrav));
+	  if (shot)
+		b = M * currVelocities - timeStep*((K*(currPositions - origPositions)));
+	  else
+		  b = M * currVelocities - timeStep * ((K*(currPositions - origPositions)));
 
 	  currVelocities = ASolver->solve(b);
 
-	  integratePosition(timeStep,false);
+	  integratePosition(timeStep,false, currTime);
   }
 
   //Update the current position with the integrated velocity
-  void integratePosition(double timeStep, bool squeezing){
+  void integratePosition(double timeStep, bool squeezing,double currTime){
     if (isFixed)
       return;  //a fixed object is immobile
     
     currPositions+= currVelocities * timeStep;
-	
+
+
 	if (squeezing)
 		currPositions+=VectorXd::Random(currPositions.size());
 
   }
   
   //the full integration for the time step (velocity + position)
-  void integrate(double timeStep,bool squeezing){
+  void integrate(double timeStep,bool squeezing,double currTime,int i, double power, double angleth, double anglephi, double airth, double airphi, double airforce){
 	  
-    integrateVelocity(timeStep);
-    integratePosition(timeStep, squeezing);
+    integrateVelocity(timeStep,i, power, angleth, anglephi, airth, airphi, airforce);
+    integratePosition(timeStep, squeezing, currTime);
   }
   
   
@@ -557,8 +634,8 @@ public:
     
     VectorXd naturalCOM=initializeVolumesAndMasses();
     //cout<<"naturalCOM: "<<naturalCOM<<endl;
-    
-    
+
+
     origPositions-= naturalCOM.replicate(origPositions.rows()/3,1);  //removing the natural COM of the OFF file (natural COM is never used again)
     //cout<<"after natrualCOM origPositions: "<<origPositions<<endl;
     
@@ -651,7 +728,20 @@ public:
     for (int i=0;i<globalPositions.size();i+=3)
       viewerV.row(i/3)<<globalPositions.segment(i,3).transpose();
   }
-  
+
+  void shotmedown(double power, double angleth,double anglephi,double airth, double airphi, double airforce) {
+	  meshes[3].isFixed = false;
+	  meshes[4].shot = true;
+	  meshes[3].setshotvel(power, angleth, anglephi, airth, airphi, airforce);
+
+  }
+
+  void shenerestart() {
+
+	  meshes[3].restartshot();
+
+	  meshes[4].shot=false;
+  }
   /*********************************************************************
    This function handles a single time step
    1. Integrating velocities and position from forces and previous impulses
@@ -659,13 +749,13 @@ public:
    3. Resolving constraints iteratively by updating velocities until the system is valid (or maxIterations has passed)
    *********************************************************************/
   
-  void updateScene(double timeStep, double CRCoeff, const double tolerance, const int maxIterations, MatrixXd& viewerV,bool squeezing,double friction){
+  void updateScene(double timeStep, double CRCoeff, const double tolerance, const int maxIterations, MatrixXd& viewerV,bool squeezing,double friction,double currTime, double power, double angleth, double anglephi, double airth, double airphi, double airforce){
 	 
     /*******************1. Integrating velocity and position from external and internal forces************************************/
 	
 
 	for (int i = 0; i < meshes.size(); i++)
-		meshes[i].integrate(timeStep, squeezing);
+		meshes[i].integrate(timeStep, squeezing, currTime, i, power, angleth, anglephi, airth, airphi, airforce);
 		
     
     mesh2global();
@@ -683,10 +773,28 @@ public:
 
 
     //collision constraints
-    for (int i=0;i<meshes.size();i++)
-      for (int j=i+1;j<meshes.size(); j++)
-        meshes[i].createCollisionConstraints(meshes[j], i==j, timeStep, CRCoeff, activeConstraints);
-    
+	int meshsize = meshes.size();
+	for (int i = 0; i < meshsize; i++) {
+		if (i == 4) continue;
+		for (int j = i + 1; j < meshsize; j++)
+		{
+			if (j == 4) continue;
+			if (meshes[i].createCollisionConstraints(meshes[j], i == j, timeStep, CRCoeff, activeConstraints)) {
+				if (j != 4) {
+					meshes[j].isFixed = true;
+
+					//Mesh m = meshes[i];
+					meshes[i].isFixed=true;
+
+				}
+				if (j == 9) {
+					//meshes[i].isFixed = true;
+				}
+			}
+		}
+	}
+
+	mesh2global();
     /*******************3. Resolving velocity constraints iteratively until the velocities are valid************************************/
     
     /***************************
@@ -729,7 +837,7 @@ public:
 		for (int j = 0; j < particleIndices.size(); j++)
 		{
 
-			if ((activeConstraints.at(i).constraintType != DISTANCE) && timeStep != 0)
+			if ((activeConstraints.at(i).constraintType != DISTANCE)&&(activeConstraints.at(i).constraintType != COLLISION) && timeStep != 0)
 			{
 				globalImpulses(activeConstraints[i].globalIndices(j)) += ((1 + CRCoeff)*ForImpules[i](j)/ timeStep) ;
 			}
@@ -755,7 +863,7 @@ public:
 
 	//collision constraints
 	for (int i = 0; i < meshes.size(); i++){
-		meshes[i].integrateVelocities(timeStep);
+		meshes[i].integrateVelocities(timeStep,currTime);
 	}
 
 	if (oldtimeStep != timeStep) {
@@ -770,6 +878,8 @@ public:
     
     //updating viewer vertices
     viewerV.conservativeResize(globalPositions.size()/3,3);
+
+
     for (int i=0;i<globalPositions.size();i+=3)
       viewerV.row(i/3)<<globalPositions.segment(i,3).transpose();
   }
@@ -818,6 +928,7 @@ public:
     
     //cout<<"Vxyz: "<<Vxyz<<endl;
     Mesh m(Vxyz,boundF, T, globalPositions.size(), youngModulus, PoissonRatio, density, isFixed, userCOM, userOrientation);
+	
     meshes.push_back(m);
     int oldTsize=globalT.rows();
     globalT.conservativeResize(globalT.rows()+T.rows(),4);
@@ -842,10 +953,7 @@ public:
     sceneFileHandle.open(dataFolder+std::string("/")+sceneFileName);
     if (!sceneFileHandle.is_open())
       return false;
-    
-    constraintFileHandle.open(dataFolder+std::string("/")+constraintFileName);
-    if (!constraintFileHandle.is_open())
-      return false;
+
     int numofObjects, numofConstraints;
     
     currTime=0;
@@ -884,35 +992,10 @@ public:
       viewerF.block(oldFSize,0,objF.rows(),3)=objF.array()+globalPositions.size()/3;
       //cout<<"objF: "<<objF<<endl;
       //cout<<"viewerF: "<<viewerF<<endl;
+
       addMesh(objV,objF, objT, youngModulus, poissonRatio,  density, isFixed, userCOM, userOrientation);
     }
     
-    //reading intra-mesh attachment constraints
-    constraintFileHandle>>numofConstraints;
-    viewerEConst.conservativeResize(numofConstraints,2);
-    for (int i=0;i<numofConstraints;i++){
-      int attachM1, attachM2, attachV1, attachV2;
-      constraintFileHandle>>attachM1>>attachV1>>attachM2>>attachV2;
-      
-      VectorXi coordIndices(6);
-      coordIndices<<meshes[attachM1].globalOffset+3*attachV1,
-      meshes[attachM1].globalOffset+3*attachV1+1,
-      meshes[attachM1].globalOffset+3*attachV1+2,
-      meshes[attachM2].globalOffset+3*attachV2,
-      meshes[attachM2].globalOffset+3*attachV2+1,
-      meshes[attachM2].globalOffset+3*attachV2+2;
-      viewerEConst.row(i)<<meshes[attachM1].globalOffset/3+attachV1, meshes[attachM2].globalOffset/3+attachV2;
-      
-      VectorXd constraintInvMasses(6);
-      constraintInvMasses<<meshes[attachM1].invMasses(attachV1),
-      meshes[attachM1].invMasses(attachV1),
-      meshes[attachM1].invMasses(attachV1),
-      meshes[attachM2].invMasses(attachV2),
-      meshes[attachM2].invMasses(attachV2),
-      meshes[attachM2].invMasses(attachV2);
-      double refValue=(meshes[attachM1].currPositions.segment(3*attachV1,3)-meshes[attachM2].currPositions.segment(3*attachV2,3)).norm();
-      userConstraints.push_back(Constraint(DISTANCE, EQUALITY, coordIndices, constraintInvMasses, MatrixXd::Zero(0,0), refValue, 0.0));
-    }
     return true;
   }
   
